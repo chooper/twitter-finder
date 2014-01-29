@@ -10,8 +10,9 @@ Please see the README at https://github.com/chooper/twitter-finder/ for more inf
 # imports
 import os, time, json
 from sys import exit
-from urlparse import urlparse
+import urlparse
 from contextlib import contextmanager
+import psycopg2
 import tweepy
 
 # import exceptions
@@ -58,6 +59,7 @@ def validate_env():
         'TW_CONSUMER_SECRET',
         'TW_ACCESS_TOKEN',
         'TW_ACCESS_TOKEN_SECRET',
+        'DATABASE_URL',
         ]
 
     # Check for missing env vars
@@ -85,6 +87,37 @@ def main():
     consumer_secret   = os.environ.get('TW_CONSUMER_SECRET')
     access_key        = os.environ.get('TW_ACCESS_TOKEN')
     access_secret     = os.environ.get('TW_ACCESS_TOKEN_SECRET')
+    database_url      = os.environ.get('DATABASE_URL')
+
+    urlparse.uses_netloc.append("postgres")
+    url = urlparse.urlparse(os.environ["DATABASE_URL"])
+
+    with measure(at='db-connect'):
+        conn = psycopg2.connect(
+            database=url.path[1:],
+            user=url.username,
+            password=url.password,
+            host=url.hostname,
+            port=url.port)
+
+    with measure(at='db-init'):
+        cursor = conn.cursor()
+        try:
+          cursor.execute('''
+              CREATE TABLE tweets (
+                  id bigint CONSTRAINT firstkey PRIMARY KEY,
+                  created_at timestamp,
+                  text char(180), /* sometimes i find tweets slightly larger than 140chars */
+                  author_id bigint,
+                  author_screenname char(40)
+              );
+          ''')
+        except psycopg2.ProgrammingError:
+            # already exists
+            pass
+        finally:
+            cursor.close()
+            conn.commit()
 
     auth = tweepy.OAuthHandler(consumer_key=consumer_key,
         consumer_secret=consumer_secret)
@@ -97,13 +130,27 @@ def main():
 
     for status in results:
         with measure(at='process_status', status_id=status.id):
-            # TODO: Check if tweet is already in postgres DB 
-            print status.id
-            print status.created_at
-            print status.text
-            print status.author.id
-            print status.author.screen_name
-            count(metric_prefix, 'tweets', 1, status=status.id, author=status.author.id)
+            cursor = conn.cursor()
+            try:
+                cursor.execute('''
+                    INSERT INTO tweets (id, created_at, text, author_id, author_screenname)
+                    VALUES (%s, %s, %s, %s, %s)''',
+                    (
+                        status.id,
+                        status.created_at,
+                        status.text,
+                        status.author.id,
+                        status.author.screen_name,
+                    )
+                )
+            except psycopg2.IntegrityError:
+                # we already saw this tweet
+                pass
+            else:
+                count(metric_prefix, 'tweets', 1, status=status.id, author=status.author.id)
+            finally:
+                cursor.close()
+                conn.commit()
 
     log(at='finish', status='ok', duration=time.time() - main_start)
 
