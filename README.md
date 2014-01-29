@@ -28,6 +28,7 @@ Windows.
 5. Push your application: `git push heroku master`
 6. Test that your finder works: `heroku run ./finder.py`
 7. Scale it to 1: `heroku ps:scale worker=1`
+8. Optionally set up Librato: `heroku addons:add librato`
 
 That should be it! It seems like alot of steps but after this you're all done!
 

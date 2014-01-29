@@ -119,40 +119,42 @@ def main():
             cursor.close()
             conn.commit()
 
-    auth = tweepy.OAuthHandler(consumer_key=consumer_key,
-        consumer_secret=consumer_secret)
-    auth.set_access_token(access_key, access_secret)
+    while True:
+        auth = tweepy.OAuthHandler(consumer_key=consumer_key,
+            consumer_secret=consumer_secret)
+        auth.set_access_token(access_key, access_secret)
 
-    api = tweepy.API(auth_handler=auth, secure=True, retry_count=3)
+        api = tweepy.API(auth_handler=auth, secure=True, retry_count=3)
 
-    with measure(at='search', term=search_term):
-        results = api.search(search_term, lang='en')
+        with measure(at='search', term=search_term):
+            results = api.search(search_term, lang='en')
 
-    for status in results:
-        with measure(at='process_status', status_id=status.id):
-            cursor = conn.cursor()
-            try:
-                cursor.execute('''
-                    INSERT INTO tweets (id, created_at, text, author_id, author_screenname)
-                    VALUES (%s, %s, %s, %s, %s)''',
-                    (
-                        status.id,
-                        status.created_at,
-                        status.text,
-                        status.author.id,
-                        status.author.screen_name,
+        for status in results:
+            with measure(at='process_status', status_id=status.id):
+                cursor = conn.cursor()
+                try:
+                    cursor.execute('''
+                        INSERT INTO tweets (id, created_at, text, author_id, author_screenname)
+                        VALUES (%s, %s, %s, %s, %s)''',
+                        (
+                            status.id,
+                            status.created_at,
+                            status.text,
+                            status.author.id,
+                            status.author.screen_name,
+                        )
                     )
-                )
-            except psycopg2.IntegrityError:
-                # we already saw this tweet
-                pass
-            else:
-                count(metric_prefix, 'tweets', 1, status=status.id, author=status.author.id)
-            finally:
-                cursor.close()
-                conn.commit()
+                except psycopg2.IntegrityError:
+                    # we already saw this tweet
+                    pass
+                else:
+                    count(metric_prefix, 'tweets', 1, status=status.id, author=status.author.id)
+                finally:
+                    cursor.close()
+                    conn.commit()
 
-    log(at='finish', status='ok', duration=time.time() - main_start)
+        log(at='finish', status='ok', duration=time.time() - main_start)
+        time.sleep(60)
 
 if __name__ == '__main__':
     # set up raven/sentry
@@ -163,13 +165,15 @@ if __name__ == '__main__':
     else:
         raven_client = None
 
-    try:
-        main()
-    except KeyboardInterrupt:
-        log(at='keyboard_interrupt')
-        quit()
-    except:
-        if raven_client:
-            raven_client.captureException()
-        raise
+    while True:
+        try:
+            main()
+        except KeyboardInterrupt:
+            log(at='keyboard_interrupt')
+            quit()
+        except:
+            if raven_client:
+                raven_client.captureException()
+            raise
+        time.sleep(10)
 
