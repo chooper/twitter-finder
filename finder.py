@@ -132,7 +132,10 @@ def main():
         for status in results:
             with measure(at='process_status', status_id=status.id):
                 cursor = conn.cursor()
-                try:
+                cursor.execute('SELECT COUNT(*) FROM tweets WHERE id=%s', (status.id,))
+                tweet_exists = (cursor.fetchone()[0] > 0)
+
+                if not tweet_exists:
                     cursor.execute('''
                         INSERT INTO tweets (id, created_at, text, author_id, author_screenname)
                         VALUES (%s, %s, %s, %s, %s)''',
@@ -144,14 +147,9 @@ def main():
                             status.author.screen_name,
                         )
                     )
-                except psycopg2.IntegrityError:
-                    # we already saw this tweet
-                    pass
-                else:
                     count(metric_prefix, 'tweets', 1, status=status.id, author=status.author.id)
-                finally:
-                    cursor.close()
-                    conn.commit()
+                cursor.close()
+                conn.commit()
 
         log(at='finish', status='ok', duration=time.time() - main_start)
         time.sleep(60)
