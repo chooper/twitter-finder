@@ -82,6 +82,30 @@ def search(api, search_term, lang='en'):
     return results
 
 
+@backoff.on_exception(backoff.expo, psycopg2.DatabaseError, max_tries=8)
+def tweet_exists(cursor, status):
+    """Check if a given tweet exists in the DB"""
+    cursor.execute('SELECT COUNT(*) FROM tweets WHERE id=%s', (status.id,))
+    tweet_exists = (cursor.fetchone()[0] > 0)
+    return tweet_exists
+
+
+@backoff.on_exception(backoff.expo, psycopg2.DatabaseError, max_tries=8)
+def insert_tweet(cursor, status):
+    """Insert given tweet into the DB"""
+    cursor.execute('''INSERT INTO tweets
+        (id, created_at, text, author_id, author_screenname)
+        VALUES (%s, %s, %s, %s, %s)''',
+        (
+            status.id,
+            status.created_at,
+            status.text,
+            status.author.id,
+            status.author.screen_name,
+        )
+    )
+
+
 def main():
     log(at='main')
     main_start = time.time()
@@ -138,21 +162,9 @@ def main():
         for status in results:
             with measure(at='process_status', status_id=status.id):
                 cursor = conn.cursor()
-                cursor.execute('SELECT COUNT(*) FROM tweets WHERE id=%s', (status.id,))
-                tweet_exists = (cursor.fetchone()[0] > 0)
 
-                if not tweet_exists:
-                    cursor.execute('''
-                        INSERT INTO tweets (id, created_at, text, author_id, author_screenname)
-                        VALUES (%s, %s, %s, %s, %s)''',
-                        (
-                            status.id,
-                            status.created_at,
-                            status.text,
-                            status.author.id,
-                            status.author.screen_name,
-                        )
-                    )
+                if not tweet_exists(cursor, status):
+                    insert_tweet(cursor, status)
                     count(metric_prefix, 'tweets', 1, status=status.id, author=status.author.id)
                 cursor.close()
                 conn.commit()
