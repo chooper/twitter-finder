@@ -14,6 +14,7 @@ import urlparse
 from contextlib import contextmanager
 import psycopg2
 import tweepy
+import backoff
 
 # import exceptions
 from urllib2 import HTTPError
@@ -73,6 +74,14 @@ def validate_env():
     log(at='validate_env', status='ok')
 
 
+@backoff.on_exception(backoff.expo, tweepy.TweepError, max_tries=8)
+def search(api, search_term, lang='en'):
+    """Search twitter for the given search term"""
+    with measure(at='search', term=search_term):
+        results = api.search(search_term, lang=lang)
+    return results
+
+
 def main():
     log(at='main')
     main_start = time.time()
@@ -81,7 +90,6 @@ def main():
 
     search_term      = os.environ.get('SEARCH_TERM')
     metric_prefix     = os.environ.get('METRIC_PREFIX')
-    #owner_username    = os.environ.get('TW_OWNER_USERNAME')
     username          = os.environ.get('TW_USERNAME')
     consumer_key      = os.environ.get('TW_CONSUMER_KEY')
     consumer_secret   = os.environ.get('TW_CONSUMER_SECRET')
@@ -125,9 +133,7 @@ def main():
         auth.set_access_token(access_key, access_secret)
 
         api = tweepy.API(auth_handler=auth, secure=True, retry_count=3)
-
-        with measure(at='search', term=search_term):
-            results = api.search(search_term, lang='en')
+        results = search(api, search_term)
 
         for status in results:
             with measure(at='process_status', status_id=status.id):
